@@ -118,8 +118,8 @@ impl CacheClientBuilder {
             key: key.to_string(),
             restore_keys,
             max_retries: 2,
-            min_retry_interval: Duration::from_millis(5556),
-            max_retry_interval: Duration::from_secs(5),
+            min_retry_interval: Duration::from_millis(50),
+            max_retry_interval: Duration::from_secs(10),
             backoff_factor_base: 3,
             download_chunk_size: 4 << 20, // 4 MiB
             download_chunk_timeout,
