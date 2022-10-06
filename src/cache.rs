@@ -196,16 +196,16 @@ impl CacheClientBuilder {
     }
 
     pub fn build(self) -> Result<CacheClient> {
-        let mut headers = HeaderMap::new();
-        headers.insert(
+        let mut api_headers = HeaderMap::new();
+        api_headers.insert(
             header::ACCEPT,
             HeaderValue::from_static("application/json;api-version=6.0-preview.1"),
         );
 
-        let auth_value = format!("Bearer {}", self.token);
-        let mut auth_value = header::HeaderValue::from_str(&auth_value)?;
+        let auth_value = Bytes::from(format!("Bearer {}", self.token));
+        let mut auth_value = header::HeaderValue::from_maybe_shared(auth_value)?;
         auth_value.set_sensitive(true);
-        headers.insert(http::header::AUTHORIZATION, auth_value);
+        api_headers.insert(http::header::AUTHORIZATION, auth_value);
 
         let retry_policy = ExponentialBackoff::builder()
             .retry_bounds(self.min_retry_interval, self.max_retry_interval)
@@ -214,7 +214,6 @@ impl CacheClientBuilder {
 
         let client = reqwest::ClientBuilder::new()
             .user_agent(self.user_agent)
-            .default_headers(headers)
             .build()?;
         let client = reqwest_middleware::ClientBuilder::new(client)
             .with(TracingMiddleware::default())
@@ -231,6 +230,7 @@ impl CacheClientBuilder {
         Ok(CacheClient {
             client,
             base_url,
+            api_headers,
             key: self.key,
             restore_keys: self.restore_keys,
             download_chunk_size: self.download_chunk_size,
@@ -246,6 +246,7 @@ impl CacheClientBuilder {
 pub struct CacheClient {
     client: ClientWithMiddleware,
     base_url: Url,
+    api_headers: HeaderMap,
 
     key: String,
     restore_keys: String,
@@ -291,7 +292,12 @@ impl CacheClient {
         let mut url = self.base_url.join("cache")?;
         url.set_query(Some(&query));
 
-        let response = self.client.get(url).send().await?;
+        let response = self
+            .client
+            .get(url)
+            .headers(self.api_headers.clone())
+            .send()
+            .await?;
         let status = response.status();
         if status == http::StatusCode::NO_CONTENT {
             return Ok(None);
@@ -464,6 +470,7 @@ impl CacheClient {
         let response = self
             .client
             .get(uri)
+            .headers(self.api_headers.clone())
             .header(header::RANGE, HeaderValue::from_str(&range)?)
             .header(
                 HeaderName::from_static("x-ms-range-get-content-md5"),
@@ -547,6 +554,7 @@ impl CacheClient {
         let response = self
             .client
             .post(url)
+            .headers(self.api_headers.clone())
             .json(&reserve_cache_request)
             .send()
             .await?;
@@ -651,6 +659,7 @@ impl CacheClient {
         let response = self
             .client
             .patch(uri)
+            .headers(self.api_headers.clone())
             .header(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("application/octet-stream"),
@@ -683,6 +692,7 @@ impl CacheClient {
         let response = self
             .client
             .post(url)
+            .headers(self.api_headers.clone())
             .json(&commit_cache_request)
             .send()
             .await?;
