@@ -56,4 +56,11 @@ pub enum Error {
 
     #[error(transparent)]
     UrlParse(#[from] url::ParseError),
+
+    #[error("Error reading env var \"{name}\": {source} ")]
+    VarError {
+        #[source]
+        source: std::env::VarError,
+        name: &'static str,
+    },
 }

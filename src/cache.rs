@@ -108,7 +108,7 @@ impl CacheClientBuilder {
             .map(|v| Duration::from_secs(v * 60))
             .unwrap_or(Duration::from_secs(60));
 
-        let restore_keys: Vec<String> = restore_keys.into_iter().map(|s| s.to_string()).collect();
+        let restore_keys: Vec<String> = restore_keys.iter().map(|s| s.to_string()).collect();
         let restore_keys = restore_keys.join(",");
 
         Ok(Self {
@@ -196,6 +196,31 @@ impl CacheClientBuilder {
     }
 
     pub fn build(self) -> Result<CacheClient> {
+        self.try_into()
+    }
+}
+
+pub struct CacheClient {
+    client: ClientWithMiddleware,
+    base_url: Url,
+    api_headers: HeaderMap,
+
+    key: String,
+    restore_keys: String,
+
+    download_chunk_size: u64,
+    download_chunk_timeout: Duration,
+    download_concurrency: u32,
+
+    upload_chunk_size: u64,
+    upload_chunk_timeout: Duration,
+    upload_concurrency: u32,
+}
+
+impl TryInto<CacheClient> for CacheClientBuilder {
+    type Error = Error;
+
+    fn try_into(self) -> Result<CacheClient, Self::Error> {
         let mut api_headers = HeaderMap::new();
         api_headers.insert(
             header::ACCEPT,
@@ -223,7 +248,7 @@ impl CacheClientBuilder {
 
         let base_url = Url::parse(&format!(
             "{}{}",
-            self.base_url.trim_end_matches("/"),
+            self.base_url.trim_end_matches('/'),
             BASE_URL_PATH
         ))?;
 
@@ -243,24 +268,24 @@ impl CacheClientBuilder {
     }
 }
 
-pub struct CacheClient {
-    client: ClientWithMiddleware,
-    base_url: Url,
-    api_headers: HeaderMap,
-
-    key: String,
-    restore_keys: String,
-
-    download_chunk_size: u64,
-    download_chunk_timeout: Duration,
-    download_concurrency: u32,
-
-    upload_chunk_size: u64,
-    upload_chunk_timeout: Duration,
-    upload_concurrency: u32,
-}
-
 impl CacheClient {
+    pub fn from_env() -> Result<Self> {
+        let url = env::var("ACTIONS_CACHE_URL").map_err(|source| Error::VarError {
+            source,
+            name: "ACTIONS_CACHE_URL",
+        })?;
+        let token = env::var("ACTIONS_RUNTIME_TOKEN").map_err(|source| Error::VarError {
+            source,
+            name: "ACTIONS_RUNTIME_TOKEN",
+        })?;
+        let key = env::var("ACTIONS_CACHE_KEY").map_err(|source| Error::VarError {
+            source,
+            name: "ACTIONS_CACHE_KEY",
+        })?;
+        let restore_keys = env::var("ACTIONS_CACHE_RESTORE_KEYS").unwrap_or_else(|_| key.clone());
+        CacheClientBuilder::new(&url, &token, &key, &[&restore_keys])?.build()
+    }
+
     pub fn builder<B: Into<String>, T: Into<String>>(
         base_url: B,
         token: T,
@@ -372,7 +397,7 @@ impl CacheClient {
                 let mut chunks = future::try_join_all(chunks.into_iter()).await?;
                 chunks.insert(0, data);
 
-                return Ok(chunks.concat().into());
+                return Ok(chunks.concat());
             }
 
             // Download chunks with max concurrency
@@ -396,7 +421,7 @@ impl CacheClient {
             let mut chunks = future::try_join_all(chunks).await?;
             chunks.insert(0, data);
 
-            return Ok(chunks.concat().into());
+            return Ok(chunks.concat());
         }
 
         debug!("Unable to validate download, no Content-Range header or unknown size");
@@ -438,7 +463,7 @@ impl CacheClient {
             start += self.download_chunk_size;
         }
 
-        Ok(chunks.concat().into())
+        Ok(chunks.concat())
     }
 
     #[instrument(skip(self, uri))]
@@ -702,7 +727,7 @@ impl CacheClient {
             Ok(())
         } else {
             let message = response.text().await.unwrap_or_else(|err| err.to_string());
-            return Err(Error::CacheServiceStatus { status, message });
+            Err(Error::CacheServiceStatus { status, message })
         }
     }
 }
@@ -730,4 +755,42 @@ pub fn check_key(key: &str) -> Result<()> {
         return Err(Error::InvalidKeyComma(key.to_string()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use std::io;
+    use std::time::SystemTime;
+
+    use tokio::test;
+
+    use super::*;
+
+    #[test]
+    async fn from_env() {
+        let version = SystemTime::UNIX_EPOCH.elapsed().unwrap().as_millis();
+        env::set_var("ACTIONS_CACHE_KEY", format!("gha-toolkit-{version:#x}"));
+
+        match CacheClient::from_env() {
+            Ok(client) => {
+                const CACHE_ENTRY: &str = "cache-entry";
+                const CACHE_DATA: &str = "Hello World!";
+
+                client
+                    .put(CACHE_ENTRY, io::Cursor::new(CACHE_DATA.as_bytes()))
+                    .await
+                    .unwrap();
+
+                let entry = client.entry(CACHE_ENTRY).await.unwrap().unwrap();
+
+                let url = entry.archive_location.unwrap();
+                let cache_data = client.get(&url).await.unwrap();
+                let cache_data = String::from_utf8_lossy(&cache_data);
+                assert_eq!(&cache_data, CACHE_DATA)
+            }
+            Err(err) => {
+                warn!("Skipping test: {err}");
+            }
+        }
+    }
 }
