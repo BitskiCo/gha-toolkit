@@ -34,6 +34,9 @@ pub enum Error {
     #[error("Key Validation Error: {0} cannot be larger than 512 characters")]
     InvalidKeyLength(String),
 
+    #[error("Missing one of key or restore keys")]
+    MissingKey,
+
     #[error(transparent)]
     IO(#[from] std::io::Error),
 

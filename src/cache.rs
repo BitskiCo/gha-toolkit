@@ -64,8 +64,8 @@ pub struct CacheClientBuilder {
     base_url: String,
     token: String,
 
-    key: String,
-    restore_keys: String,
+    cache_to: Option<String>,
+    cache_from: Vec<String>,
 
     max_retries: u32,
     min_retry_interval: Duration,
@@ -92,31 +92,19 @@ pub struct CacheClientBuilder {
 }
 
 impl CacheClientBuilder {
-    pub fn new<B: Into<String>, T: Into<String>>(
-        base_url: B,
-        token: T,
-        key: &str,
-        restore_keys: &[&str],
-    ) -> Result<Self> {
-        for key in restore_keys {
-            check_key(key)?;
-        }
-
+    pub fn new<B: Into<String>, T: Into<String>>(base_url: B, token: T) -> Self {
         let download_chunk_timeout = std::env::var("SEGMENT_DOWNLOAD_TIMEOUT_MINS")
             .ok()
             .and_then(|s| s.parse().ok())
             .map(|v: u64| Duration::from_secs(v * 60))
             .unwrap_or(Duration::from_secs(60));
 
-        let restore_keys: Vec<String> = restore_keys.iter().map(|s| s.to_string()).collect();
-        let restore_keys = restore_keys.join(",");
-
-        Ok(Self {
+        Self {
             user_agent: format!("{}/{}", env!("CARGO_CRATE_NAME"), env!("CARGO_PKG_VERSION")),
             base_url: base_url.into(),
             token: token.into(),
-            key: key.to_string(),
-            restore_keys,
+            cache_to: None,
+            cache_from: vec![],
             max_retries: 2,
             min_retry_interval: Duration::from_millis(50),
             max_retry_interval: Duration::from_secs(10),
@@ -127,7 +115,19 @@ impl CacheClientBuilder {
             upload_concurrency: 4,
             upload_chunk_size: 1 << 20, // 1 MiB
             upload_chunk_timeout: download_chunk_timeout,
-        })
+        }
+    }
+
+    pub fn from_env() -> Result<Self> {
+        let url = env::var("ACTIONS_CACHE_URL").map_err(|source| Error::VarError {
+            source,
+            name: "ACTIONS_CACHE_URL",
+        })?;
+        let token = env::var("ACTIONS_RUNTIME_TOKEN").map_err(|source| Error::VarError {
+            source,
+            name: "ACTIONS_RUNTIME_TOKEN",
+        })?;
+        Ok(CacheClientBuilder::new(&url, &token))
     }
 
     pub fn user_agent<T: Into<String>>(mut self, user_agent: T) -> Self {
@@ -137,6 +137,20 @@ impl CacheClientBuilder {
 
     pub fn base_url<T: Into<String>>(mut self, base_url: T) -> Self {
         self.base_url = base_url.into();
+        self
+    }
+
+    pub fn cache_to<T: Into<String>>(mut self, cache_to: T) -> Self {
+        self.cache_to = Some(cache_to.into());
+        self
+    }
+
+    pub fn cache_from<T>(mut self, cache_from: T) -> Self
+    where
+        T: Iterator,
+        T::Item: Into<String>,
+    {
+        self.cache_from = cache_from.map(Into::into).collect();
         self
     }
 
@@ -205,8 +219,8 @@ pub struct CacheClient {
     base_url: Url,
     api_headers: HeaderMap,
 
-    key: String,
-    restore_keys: String,
+    cache_to: Option<String>,
+    cache_from: Option<String>,
 
     download_chunk_size: u64,
     download_chunk_timeout: Duration,
@@ -221,6 +235,26 @@ impl TryInto<CacheClient> for CacheClientBuilder {
     type Error = Error;
 
     fn try_into(self) -> Result<CacheClient, Self::Error> {
+        if self.cache_to.is_none() && self.cache_from.is_empty() {
+            return Err(Error::MissingKey);
+        }
+
+        let cache_to = if let Some(cache_to) = self.cache_to {
+            check_key(&cache_to)?;
+            Some(cache_to)
+        } else {
+            None
+        };
+
+        let cache_from = if !self.cache_from.is_empty() {
+            for key in &self.cache_from {
+                check_key(key)?;
+            }
+            Some(self.cache_from.join(","))
+        } else {
+            None
+        };
+
         let mut api_headers = HeaderMap::new();
         api_headers.insert(
             header::ACCEPT,
@@ -256,8 +290,8 @@ impl TryInto<CacheClient> for CacheClientBuilder {
             client,
             base_url,
             api_headers,
-            key: self.key,
-            restore_keys: self.restore_keys,
+            cache_to,
+            cache_from,
             download_chunk_size: self.download_chunk_size,
             download_chunk_timeout: self.download_chunk_timeout,
             download_concurrency: self.download_concurrency,
@@ -269,30 +303,8 @@ impl TryInto<CacheClient> for CacheClientBuilder {
 }
 
 impl CacheClient {
-    pub fn from_env() -> Result<Self> {
-        let url = env::var("ACTIONS_CACHE_URL").map_err(|source| Error::VarError {
-            source,
-            name: "ACTIONS_CACHE_URL",
-        })?;
-        let token = env::var("ACTIONS_RUNTIME_TOKEN").map_err(|source| Error::VarError {
-            source,
-            name: "ACTIONS_RUNTIME_TOKEN",
-        })?;
-        let key = env::var("ACTIONS_CACHE_KEY").map_err(|source| Error::VarError {
-            source,
-            name: "ACTIONS_CACHE_KEY",
-        })?;
-        let restore_keys = env::var("ACTIONS_CACHE_RESTORE_KEYS").unwrap_or_else(|_| key.clone());
-        CacheClientBuilder::new(&url, &token, &key, &[&restore_keys])?.build()
-    }
-
-    pub fn builder<B: Into<String>, T: Into<String>>(
-        base_url: B,
-        token: T,
-        key: &str,
-        restore_keys: &[&str],
-    ) -> Result<CacheClientBuilder> {
-        CacheClientBuilder::new(base_url, token, key, restore_keys)
+    pub fn builder<B: Into<String>, T: Into<String>>(base_url: B, token: T) -> CacheClientBuilder {
+        CacheClientBuilder::new(base_url, token)
     }
 
     pub fn base_url(&self) -> &str {
@@ -300,20 +312,27 @@ impl CacheClient {
         &base_url[..base_url.len() - BASE_URL_PATH.len()]
     }
 
-    pub fn key(&self) -> &str {
-        &self.key
+    pub fn cache_to(&self) -> Option<&str> {
+        self.cache_to.as_deref()
     }
 
-    pub fn restore_keys(&self) -> &str {
-        &self.restore_keys
+    pub fn cache_from(&self) -> Option<&str> {
+        self.cache_from.as_deref()
     }
 
     #[instrument(skip(self))]
     pub async fn entry(&self, version: &str) -> Result<Option<ArtifactCacheEntry>> {
+        let cache_from = if let Some(cache_from) = self.cache_from.as_ref() {
+            cache_from
+        } else {
+            return Ok(None);
+        };
+
         let query = serde_urlencoded::to_string(&CacheQuery {
-            keys: &self.restore_keys,
+            keys: cache_from,
             version: &get_cache_version(version),
         })?;
+
         let mut url = self.base_url.join("cache")?;
         url.set_query(Some(&query));
 
@@ -549,13 +568,19 @@ impl CacheClient {
 
     #[instrument(skip(self, data))]
     pub async fn put<T: Read + Seek>(&self, version: &str, mut data: T) -> Result<()> {
+        let cache_to = if let Some(cache_to) = self.cache_to.as_ref() {
+            cache_to
+        } else {
+            return Ok(());
+        };
+
         let cache_size = data.seek(SeekFrom::End(0))?;
         if cache_size > i64::MAX as u64 {
             return Err(Error::CacheSizeTooLarge(cache_size as usize));
         }
 
         let version = &get_cache_version(version);
-        let cache_id = self.reserve(version, cache_size).await?;
+        let cache_id = self.reserve(cache_to, version, cache_size).await?;
 
         if let Some(cache_id) = cache_id {
             data.rewind()?;
@@ -567,11 +592,11 @@ impl CacheClient {
     }
 
     #[instrument(skip(self))]
-    async fn reserve(&self, version: &str, cache_size: u64) -> Result<Option<i64>> {
+    async fn reserve(&self, key: &str, version: &str, cache_size: u64) -> Result<Option<i64>> {
         let url = self.base_url.join("caches")?;
 
         let reserve_cache_request = ReserveCacheRequest {
-            key: &self.key,
+            key,
             version,
             cache_size: cache_size as i64,
         };
@@ -587,10 +612,7 @@ impl CacheClient {
         let status = response.status();
         match status {
             http::StatusCode::NO_CONTENT | http::StatusCode::CONFLICT => {
-                warn!(
-                    "No cache ID for key {} version {version}: {status:?}",
-                    self.key
-                );
+                warn!("No cache ID for key {} version {version}: {status:?}", key);
                 return Ok(None);
             }
             _ if !status.is_success() => {
@@ -767,30 +789,80 @@ mod test {
     use super::*;
 
     #[test]
+    async fn builder() {
+        assert!(CacheClient::builder("http://localhost", "token")
+            .build()
+            .is_err());
+
+        assert!(CacheClient::builder("http://localhost", "token")
+            .cache_to("key")
+            .build()
+            .is_ok());
+
+        assert!(CacheClient::builder("http://localhost", "token")
+            .cache_from(["key"].into_iter())
+            .build()
+            .is_ok());
+
+        assert!(CacheClient::builder("http://localhost", "token")
+            .cache_to("key")
+            .cache_from(["key"].into_iter())
+            .build()
+            .is_ok());
+    }
+
+    #[test]
     async fn from_env() {
         let version = SystemTime::UNIX_EPOCH.elapsed().unwrap().as_millis();
-        env::set_var("ACTIONS_CACHE_KEY", format!("gha-toolkit-{version:#x}"));
+        let cache_key = format!("gha-toolkit-{version:#x}");
 
-        match CacheClient::from_env() {
-            Ok(client) => {
-                const CACHE_ENTRY: &str = "cache-entry";
-                const CACHE_DATA: &str = "Hello World!";
+        let client = CacheClientBuilder::from_env()
+            .unwrap()
+            .cache_to(&cache_key)
+            .cache_from([&cache_key].into_iter())
+            .build()
+            .unwrap();
 
-                client
-                    .put(CACHE_ENTRY, io::Cursor::new(CACHE_DATA.as_bytes()))
-                    .await
-                    .unwrap();
+        const CACHE_ENTRY: &str = "from_env";
+        const CACHE_DATA: &str = "Hello World!";
 
-                let entry = client.entry(CACHE_ENTRY).await.unwrap().unwrap();
+        client
+            .put(CACHE_ENTRY, io::Cursor::new(CACHE_DATA))
+            .await
+            .unwrap();
 
-                let url = entry.archive_location.unwrap();
-                let cache_data = client.get(&url).await.unwrap();
-                let cache_data = String::from_utf8_lossy(&cache_data);
-                assert_eq!(&cache_data, CACHE_DATA)
-            }
-            Err(err) => {
-                panic!("{err}");
-            }
-        }
+        let entry = client.entry(CACHE_ENTRY).await.unwrap().unwrap();
+
+        let url = entry.archive_location.unwrap();
+        let actual_cache_data = client.get(&url).await.unwrap();
+        let actual_cache_data = String::from_utf8_lossy(&actual_cache_data);
+        assert_eq!(&actual_cache_data, CACHE_DATA);
+    }
+
+    #[test]
+    async fn from_env_big_data() {
+        let version = SystemTime::UNIX_EPOCH.elapsed().unwrap().as_millis();
+        let cache_key = format!("gha-toolkit-{version:#x}");
+
+        let client = CacheClientBuilder::from_env()
+            .unwrap()
+            .cache_to(&cache_key)
+            .cache_from([&cache_key].into_iter())
+            .build()
+            .unwrap();
+
+        const CACHE_ENTRY: &str = "from_env_big_data";
+        let cache_data = [42u8; 6144];
+
+        client
+            .put(CACHE_ENTRY, io::Cursor::new(&cache_data))
+            .await
+            .unwrap();
+
+        let entry = client.entry(CACHE_ENTRY).await.unwrap().unwrap();
+
+        let url = entry.archive_location.unwrap();
+        let actual_cache_data = client.get(&url).await.unwrap();
+        assert_eq!(&actual_cache_data, &cache_data);
     }
 }
