@@ -351,9 +351,7 @@ impl CacheClient {
     pub async fn get(&self, url: &str) -> Result<Vec<u8>> {
         let uri = Url::parse(url)?;
 
-        let (data, cache_size) = self
-            .download_first_chunk(uri.clone(), 0, self.download_chunk_size)
-            .await?;
+        let (data, cache_size) = self.download_first_chunk(uri.clone()).await?;
 
         if cache_size.is_none() {
             return Ok(data.to_vec());
@@ -368,16 +366,11 @@ impl CacheClient {
             if actual_size == cache_size {
                 return Ok(data.to_vec());
             }
-            if actual_size > cache_size {
-                return Err(Error::CacheSize {
-                    expected_size: cache_size as usize,
-                    actual_size: actual_size as usize,
-                });
-            }
             if actual_size != self.download_chunk_size {
                 return Err(Error::CacheChunkSize {
                     expected_size: self.download_chunk_size as usize,
                     actual_size: actual_size as usize,
+                    message: "verifying the first chunk size using the content-range header",
                 });
             }
 
@@ -434,6 +427,7 @@ impl CacheClient {
             return Err(Error::CacheChunkSize {
                 expected_size: self.download_chunk_size as usize,
                 actual_size: actual_size as usize,
+                message: "verifying the first chunk size without the content-range header",
             });
         }
 
@@ -457,6 +451,7 @@ impl CacheClient {
                 return Err(Error::CacheChunkSize {
                     expected_size: self.download_chunk_size as usize,
                     actual_size: chunk_size as usize,
+                    message: "verifying a chunk size without the content-range header",
                 });
             }
 
@@ -467,13 +462,9 @@ impl CacheClient {
     }
 
     #[instrument(skip(self, uri))]
-    async fn download_first_chunk(
-        &self,
-        uri: Url,
-        start: u64,
-        size: u64,
-    ) -> Result<(Bytes, Option<ContentRange>)> {
-        self.do_download_chunk(uri, start, size, true).await
+    async fn download_first_chunk(&self, uri: Url) -> Result<(Bytes, Option<ContentRange>)> {
+        self.do_download_chunk(uri, 0, self.download_chunk_size, true)
+            .await
     }
 
     #[instrument(skip_all, fields(uri, start, size))]
@@ -495,7 +486,6 @@ impl CacheClient {
         let response = self
             .client
             .get(uri)
-            .headers(self.api_headers.clone())
             .header(header::RANGE, HeaderValue::from_str(&range)?)
             .header(
                 HeaderName::from_static("x-ms-range-get-content-md5"),
@@ -512,6 +502,7 @@ impl CacheClient {
             return Err(Error::CacheServiceStatus { status, message });
         }
 
+        let content_length = response.content_length();
         let headers = response.headers();
 
         let content_range = if partial_content {
@@ -519,7 +510,10 @@ impl CacheClient {
                 .get(header::CONTENT_RANGE)
                 .and_then(|v| ContentRange::parse_header(&v).ok())
         } else {
-            None
+            Some(ContentRange(ContentRangeSpec::Bytes {
+                range: None,
+                instance_length: content_length,
+            }))
         };
 
         let md5sum = response
@@ -529,10 +523,16 @@ impl CacheClient {
             .and_then(|s| hex::decode(s).ok());
 
         let bytes = response.bytes().await?;
-        if bytes.len() != size as usize {
+        let actual_size = bytes.len() as u64;
+        if actual_size != content_length.unwrap_or(actual_size) || actual_size > size {
             return Err(Error::CacheChunkSize {
                 expected_size: size as usize,
                 actual_size: bytes.len(),
+                message: if expect_partial {
+                    "downloading a chunk"
+                } else {
+                    "downloading the first chunk"
+                },
             });
         }
 
@@ -789,7 +789,7 @@ mod test {
                 assert_eq!(&cache_data, CACHE_DATA)
             }
             Err(err) => {
-                warn!("Skipping test: {err}");
+                panic!("{err}");
             }
         }
     }

@@ -6,25 +6,20 @@ pub enum Error {
     #[error("Invalid chunk checksum")]
     CacheChunkChecksum,
 
-    #[error("Expected chunk size: {expected_size}, actual size: {actual_size}")]
+    #[error("While {message}: expected chunk size {expected_size} got {actual_size}")]
     CacheChunkSize {
         expected_size: usize,
         actual_size: usize,
+        message: &'static str,
     },
 
     #[error("Cache not found.")]
     CacheNotFound,
 
-    #[error("Cache service responded with {status}: {message:?}")]
+    #[error("Cache service responded with {status}: {message}")]
     CacheServiceStatus {
         status: http::StatusCode,
         message: String,
-    },
-
-    #[error("Expected size: {expected_size}, actual size: {actual_size}")]
-    CacheSize {
-        expected_size: usize,
-        actual_size: usize,
     },
 
     #[error("Cache size of {0} bytes is too large")]
