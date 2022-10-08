@@ -104,8 +104,8 @@ impl CacheClientBuilder {
 
         let download_chunk_timeout = std::env::var("SEGMENT_DOWNLOAD_TIMEOUT_MINS")
             .ok()
-            .and_then(|s| u64::from_str_radix(&s, 10).ok())
-            .map(|v| Duration::from_secs(v * 60))
+            .and_then(|s| s.parse().ok())
+            .map(|v: u64| Duration::from_secs(v * 60))
             .unwrap_or(Duration::from_secs(60));
 
         let restore_keys: Vec<String> = restore_keys.iter().map(|s| s.to_string()).collect();
@@ -539,7 +539,7 @@ impl CacheClient {
         if let Some(md5sum) = md5sum {
             use md5::Digest as _;
             let checksum = md5::Md5::digest(&bytes);
-            if &md5sum[..] != &checksum[..] {
+            if md5sum[..] != checksum[..] {
                 return Err(Error::CacheChunkChecksum);
             }
         }
