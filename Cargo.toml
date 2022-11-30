@@ -4,6 +4,8 @@ version = "0.3.0"
 edition = "2021"
 description = "GitHub Actions toolkit for Rust"
 license = "MIT"
+homepage = "https://github.com/BitskiCo/gha-toolkit"
+repository = "https://github.com/BitskiCo/gha-toolkit"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
