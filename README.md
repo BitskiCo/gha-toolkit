@@ -1,3 +1,3 @@
 # `gha-toolkit`
 
-GitHub Actions toolkit for rust
+GitHub Actions toolkit for Rust
