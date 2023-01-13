@@ -972,9 +972,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest-retry"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51a20da1ff2038a56f9c68682a42934a1a6d4d85f58fbb12ffa13a866e32db1c"
+checksum = "33ddc8328a7778309613f675c9dca7a9b8411f36108a113d4d73a972564ee849"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -984,9 +984,9 @@ dependencies = [
  "reqwest",
  "reqwest-middleware",
  "retry-policies",
+ "task-local-extensions",
  "tokio",
  "tracing",
- "truelayer-extensions",
 ]
 
 [[package]]
@@ -1359,15 +1359,6 @@ checksum = "107ae59580d2a1d994b6b965b16fe94c969fe86d3f7fd2572a1ee243bcaf7f09"
 dependencies = [
  "pin-project 0.4.29",
  "tracing",
-]
-
-[[package]]
-name = "truelayer-extensions"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59b7dcffe2c2864f8713af5a9ec67248b536821031b8f5cefbdf8eb9cac469ec"
-dependencies = [
- "tokio",
 ]
 
 [[package]]
