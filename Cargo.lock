@@ -18,31 +18,52 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "216261ddc8289130e551ddcd5ce8a064710c0d064a4d2895c67151c92b5443f6"
 
 [[package]]
-name = "async-lock"
-version = "2.0.0"
+name = "async-barrier"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "600bab218821af384fd1221c1f6db223ce69fb94baa35cbf0486994efb036a2d"
+checksum = "3ae37d82e2fc6457796836145383df7741c3a98124c6dc28a6dd367ce5c563bb"
 dependencies = [
  "async-mutex",
+ "event-listener",
+]
+
+[[package]]
+name = "async-lock"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7571a7451c8ec1746ab2ffe200dab397b85b2c995b0dec52e6bf99a09f734ab"
+dependencies = [
+ "async-barrier",
+ "async-mutex",
  "async-rwlock",
+ "async-semaphore",
 ]
 
 [[package]]
 name = "async-mutex"
-version = "1.1.5"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20e85981fc34e84cdff3fc2c9219189752633fdc538a06df8b5ac45b68a4f3a9"
+checksum = "065de1ccf10280d0d75c2f3a71a970ee1007c85c51aa3e7deee1df100f1dfadb"
 dependencies = [
  "event-listener",
 ]
 
 [[package]]
 name = "async-rwlock"
-version = "1.0.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f157cc75cd2d15441e7e4b7080bc922b585800770db02349203d3012a86cd5f"
+checksum = "6f8978b5ae008b5177da07a1bf1bfbe428f9bdb970c3fca0e92ed1c1930d7f34"
 dependencies = [
  "async-mutex",
+ "event-listener",
+]
+
+[[package]]
+name = "async-semaphore"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64fa45fce1280cc450781869a9edec7986cdefb971d3e1607798b5e52bad068a"
+dependencies = [
  "event-listener",
 ]
 
@@ -233,9 +254,9 @@ dependencies = [
 
 [[package]]
 name = "event-listener"
-version = "2.3.3"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f14646a9e0430150a87951622ba9675472b68e384b7701b8423b30560805c7a"
+checksum = "e1cd41440ae7e4734bbd42302f63eaba892afc93a3912dad84006247f0dedb0e"
 
 [[package]]
 name = "fnv"
