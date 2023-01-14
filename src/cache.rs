@@ -54,7 +54,6 @@ use async_lock::{Mutex, Semaphore};
 use bytes::Bytes;
 use futures::prelude::*;
 use http::{header, header::HeaderName, HeaderMap, HeaderValue, StatusCode};
-use hyperx::header::{ContentRange, ContentRangeSpec, Header as _};
 use reqwest::{Body, Url};
 use reqwest_middleware::ClientWithMiddleware;
 use reqwest_retry::policies::ExponentialBackoff;
@@ -523,10 +522,10 @@ impl CacheClient {
             return Ok(data.to_vec());
         }
 
-        if let Some(ContentRange(ContentRangeSpec::Bytes {
+        if let Some(ContentRange {
             instance_length: Some(cache_size),
             ..
-        })) = cache_size
+        }) = cache_size
         {
             let actual_size = data.len() as u64;
             if actual_size == cache_size {
@@ -674,12 +673,12 @@ impl CacheClient {
         let content_range = if partial_content {
             headers
                 .get(header::CONTENT_RANGE)
-                .and_then(|v| ContentRange::parse_header(&v).ok())
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse().ok())
         } else {
-            Some(ContentRange(ContentRangeSpec::Bytes {
-                range: None,
-                instance_length: content_length,
-            }))
+            Some(ContentRange {
+                instance_length: None,
+            })
         };
 
         let md5sum = response
@@ -925,4 +924,89 @@ pub fn check_key(key: &str) -> Result<()> {
         return Err(Error::InvalidKeyComma(key.to_string()));
     }
     Ok(())
+}
+
+// reduced parsing of the Content-Range header (e.g. "bytes 0-100/500"), inspired by/extracted from
+// hyperx, since that's the only part that's needed from that (unmaintained) library
+struct ContentRange {
+    instance_length: Option<u64>,
+}
+
+fn split_in_two(s: &str, separator: char) -> Option<(&str, &str)> {
+    let mut iter = s.splitn(2, separator);
+    match (iter.next(), iter.next()) {
+        (Some(a), Some(b)) => Some((a, b)),
+        _ => None,
+    }
+}
+
+impl std::str::FromStr for ContentRange {
+    // the rest of the code never cares about the exact error
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<ContentRange, ()> {
+        let (prefix, rest) = split_in_two(s, ' ').ok_or(())?;
+        if prefix != "bytes" {
+            return Err(());
+        }
+
+        let (range, length) = split_in_two(rest, '/').ok_or(())?;
+
+        let instance_length = if length == "*" {
+            None
+        } else {
+            Some(length.parse().map_err(|_| ())?)
+        };
+
+        // the code doesn't care about the range, but still validate
+        if range != "*" {
+            let (first_byte, last_byte) = split_in_two(range, '-').ok_or(())?;
+            let first_byte: u64 = first_byte.parse().map_err(|_| ())?;
+            let last_byte: u64 = last_byte.parse().map_err(|_| ())?;
+            if last_byte < first_byte {
+                return Err(());
+            }
+        }
+
+        Ok(ContentRange { instance_length })
+    }
+}
+
+#[cfg(test)]
+mod content_range_tests {
+    use super::ContentRange;
+
+    // also from hyperx
+    const VALID_TABLE: &[(&str, Option<u64>)] = &[
+        ("bytes 0-499/500", Some(500)),
+        ("bytes 0-499/*", None),
+        ("bytes */500", Some(500)),
+        ("bytes */*", None),
+    ];
+
+    const INVALID_TABLE: &[&str] = &[
+        "seconds 1-2",
+        "bytes 0-499",
+        "bytes",
+        "bytes 499-0/500",
+        "",
+        "bytes 1-2/500 3",
+        "bytes 1-2/500/600",
+        "bytes 1-2-3/500",
+    ];
+
+    #[test]
+    fn parse_valid() {
+        for &(input, expected_instance_length) in VALID_TABLE {
+            let parsed: ContentRange = input.parse().unwrap();
+            assert_eq!(parsed.instance_length, expected_instance_length)
+        }
+    }
+
+    #[test]
+    fn parse_invalid() {
+        for input in INVALID_TABLE {
+            assert!(input.parse::<ContentRange>().is_err());
+        }
+    }
 }
